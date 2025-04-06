@@ -9,7 +9,6 @@
 
 // TODO(artik): add raylib as a dependency
 // TODO(nic): abort todo when it's empty (or just whitespace)
-// TODO(nic): handle better insertion/deletion of text
 // TODO(nic): add entry editing
 
 #ifdef __linux__
@@ -24,6 +23,9 @@
 #else
 #    error "OS not supported"
 #endif
+
+#define TERM_IMPLEMENTATION
+#include "./term.h"
 
 #define SCROLL_EFFECT_SPEED_MULT 4.0f
 #define WAIT_EFFECT_TIME 2.0f
@@ -133,19 +135,6 @@ Split split_rect(Rect rect) {
     return split;
 }
 
-void visible_cursor(void) {
-    printf("\033[?25h");
-}
-
-void invisible_cursor(void) {
-    printf("\033[?25l");
-}
-
-void clear_term() {
-    printf("\033[2J");
-    printf("\033[0;0H");
-}
-
 struct termios tio = {0};
 
 void disable_terminal_interaction() {
@@ -164,7 +153,7 @@ void draw_rect(Rect rect) {
     if (rect.w < 3 || rect.h < 3) {
         return;
     }
-    printf("\033[%zu;%zuH", rect.y, rect.x);
+    position_cursor(rect.x, rect.y);
     printf("╔");
     for (size_t i = 0; i < rect.w - 2; ++i) {
         printf("═");
@@ -172,11 +161,11 @@ void draw_rect(Rect rect) {
     printf("╗");
 
     for (size_t i = 1; i < rect.h; ++i) {
-        printf("\033[%zu;%zuH", rect.y + i, rect.x);
+        position_cursor(rect.x, rect.y + i);
         printf("║%*s║", (int) (rect.w - 2), " ");
     }
 
-    printf("\033[%zu;%zuH", rect.y + rect.h, rect.x);
+    position_cursor(rect.x, rect.y + rect.h);
     printf("╚");
     for (size_t i = 0; i < rect.w - 2; ++i) {
         printf("═");
@@ -188,7 +177,7 @@ Rect draw_box(Rect rect, const char *title) {
     draw_rect(rect);
     size_t title_len = strlen(title);
     if (title_len <= rect.w - 2) {
-        printf("\033[%zu;%zuH", rect.y, rect.x + 1);
+        position_cursor(rect.x + 1, rect.y);
         printf("%s", title);
     }
     return (Rect) {
@@ -203,10 +192,10 @@ void draw_list(Rect rect, TODO_App *app, TODO_List_Index list_index) {
     List *list = &app->lists[list_index];
     for (size_t i = 0; i < list->entries_count && i < rect.h; ++i) {
         Entry *entry = &list->entries[i];
-        printf("\033[%zu;%zuH", rect.y + i, rect.x);
+        position_cursor(rect.x, rect.y + i);
         if (app->state == TODO_STATE_IDLE && list_index == app->list_index && i == list->entry_index) {
             if (entry->text_len > rect.w) {
-                if (app->scroll_effect >= entry->text_len - rect.w - 1) {
+                if (app->scroll_effect >= entry->text_len - rect.w) {
                     app->wait_effect += delta_time;
                     if (app->wait_effect >= WAIT_EFFECT_TIME) {
                         app->scroll_effect = 0.0f;
@@ -218,29 +207,29 @@ void draw_list(Rect rect, TODO_App *app, TODO_List_Index list_index) {
             } else {
                 app->wait_effect = 0.0f;
             }
-            printf("\033[47;30m");
+            set_bg_color(47, 30);
             printf("%.*s", (int) min(entry->text_len, rect.w), entry->text + (size_t) app->scroll_effect);
         } else {
             printf("%.*s", (int) min(entry->text_len, rect.w), entry->text);
         }
-        printf("\033[0m");
+        reset_bg_color();
     }
 }
 
 void draw_line_edit(Line_Edit *line, size_t y) {
-    printf("\033[%zu;%zuH", y, line->x);
+    position_cursor(line->x, y);
     const char *a = line->text + line->offset;
     printf("%.*s", (int) min(line->text_len - line->offset, line->width - 1), a);
 
-    printf("\033[%zu;%zuH", y, line->x + line->cursor - line->offset);
-    printf("\033[47;30m");
+    position_cursor(line->x + line->cursor - line->offset, y);
+    set_bg_color(47, 30);
     if (line->cursor < line->text_len) {
         char ch = line->text[line->cursor];
         printf("%c", ch);
     } else {
         printf(" ");
     }
-    printf("\033[0m");
+    reset_bg_color();
 }
 
 void draw_todo_app(TODO_App *app, Split split) {
@@ -263,7 +252,7 @@ void draw_todo_app(TODO_App *app, Split split) {
 void handle_exit(void) {
     visible_cursor();
     enable_terminal_interaction();
-    printf("\033[?1049l");
+    delete_page();
     exit(0);
 }
 
@@ -319,6 +308,7 @@ typedef enum {
     ENTER,
     BACKSPACE,
     DELETE,
+    ESC,
     UNKNOWN,
 } Been;
 
@@ -330,7 +320,16 @@ void line_edit_make_sure_cursor_inside_urmom(Line_Edit *line) {
     }
 }
 
-bool line_edit_handle_been(Line_Edit *line, int been) {
+bool line_edit_all_whitespace(Line_Edit *line) {
+    for (size_t i = 0; i < line->text_len; ++i) {
+        if (!isspace(line->text[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+int line_edit_handle_been(Line_Edit *line, int been) {
     if (been >= PRINTABLE_LAST) {
         switch (been) {
         case LEFT: {
@@ -343,8 +342,17 @@ bool line_edit_handle_been(Line_Edit *line, int been) {
                 line->cursor += 1;
             }
         } break;
+        case ESC: {
+            return -1;
+        } break;
         case ENTER: {
-            return true;
+            if (line->text_len == 0) {
+                return -1;
+            }
+            if (line_edit_all_whitespace(line)) {
+                return -1;
+            }
+            return 1;
         } break;
         case BACKSPACE: {
             if (line->cursor > 0) {
@@ -360,7 +368,7 @@ bool line_edit_handle_been(Line_Edit *line, int been) {
             }
         } break;
         case UNKNOWN: {
-            return false;
+            return 0;
         } break;
         }
     } else {
@@ -371,7 +379,7 @@ bool line_edit_handle_been(Line_Edit *line, int been) {
         }
     }
     line_edit_make_sure_cursor_inside_urmom(line);
-    return false;
+    return 0;
 }
 
 int fgetbeen(FILE *stream) {
@@ -385,7 +393,11 @@ int fgetbeen(FILE *stream) {
     } else if (ch == 27) {
         char buffer[64];
         buffer[0] = ch;
-        size_t count = 1;
+        buffer[1] = fgetc(stream);
+        if (buffer[1] == EOF) {
+            return ESC;
+        }
+        size_t count = 2;
         while (!isalpha(buffer[count - 1]) && buffer[count - 1] != '~') {
             char ch = fgetc(stream);
             if (ch != EOF) {
@@ -415,8 +427,7 @@ int main(void) {
     signal(SIGINT, sigint_handler);
     disable_terminal_interaction();
     invisible_cursor();
-
-    printf("\033[?1049h");
+    create_page();
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 
     TODO_App app = {0};
@@ -465,9 +476,11 @@ int main(void) {
             app.line_edit.width = rect.w - 2;
             line_edit_make_sure_cursor_inside_urmom(&app.line_edit);
 
-            bool finished = line_edit_handle_been(&app.line_edit, ch);
-            if (finished) {
-                app_add_entry(&app, app.list_index, app.line_edit.text, app.line_edit.text_len);
+            int state = line_edit_handle_been(&app.line_edit, ch);
+            if (state != 0) {
+                if (state > 0) {
+                    app_add_entry(&app, app.list_index, app.line_edit.text, app.line_edit.text_len);
+                }
                 memset(&app.line_edit, 0, sizeof(Line_Edit));
                 app.state = TODO_STATE_IDLE;
             }
