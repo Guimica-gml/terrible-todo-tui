@@ -7,22 +7,17 @@
 #include <ctype.h>
 #include <assert.h>
 
-// TODO(artik): add raylib as a dependency
-// TODO(nic): abort todo when it's empty (or just whitespace)
-// TODO(nic): add entry editing
-
 #ifdef __linux__
 #    include <unistd.h>
-#    include <signal.h>
-#    include <termios.h>
-#    include <fcntl.h>
-#    include <sys/ioctl.h>
 #elif _WIN32
 #    include <windows.h>
-#    define usleep Sleep
 #else
 #    error "OS not supported"
 #endif
+
+// TODO(artik): add raylib as a dependency
+// TODO(nic): abort todo when it's empty (or just whitespace)
+// TODO(nic): add entry editing
 
 #define TERM_IMPLEMENTATION
 #include "./term.h"
@@ -33,35 +28,9 @@
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #define clamp(v, _min, _max) min(max(v, _min), _max)
+#define ceilf(v) ((int)((v) + 0.5f))
 
 #define delta_time (1.0f/60.0f)
-
-typedef struct {
-    size_t rows;
-    size_t cols;
-} Term_Size;
-
-Term_Size get_terminal_size(void) {
-    Term_Size term_size = {0};
-#ifdef __linux__
-    struct winsize w;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) < 0) {
-        fprintf(stderr, "Error: could not get terminal size: %s\n", strerror(errno));
-        exit(1);
-    }
-    term_size.rows = w.ws_row;
-    term_size.cols = w.ws_col;
-#elif _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    if (!GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
-        fprintf(stderr, "Error: could not get terminal size\n");
-        exit(1);
-    }
-    term_size.cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-    term_size.rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
-#endif
-    return term_size;
-}
 
 typedef struct {
     size_t x;
@@ -125,7 +94,7 @@ Split split_rect(Rect rect) {
     Split split = {0};
     split.left.x = rect.x;
     split.left.y = rect.y;
-    split.left.w = rect.w / 2.0f;
+    split.left.w = ceilf(rect.w / 2.0f);
     split.left.h = rect.h;
 
     split.right.x = rect.x + split.left.w;
@@ -133,20 +102,6 @@ Split split_rect(Rect rect) {
     split.right.w = rect.w / 2.0f;
     split.right.h = rect.h;
     return split;
-}
-
-struct termios tio = {0};
-
-void disable_terminal_interaction() {
-    struct termios new_tio;
-    tcgetattr(STDIN_FILENO, &tio);
-    new_tio = tio;
-    new_tio.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
-}
-
-void enable_terminal_interaction() {
-    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
 }
 
 void draw_rect(Rect rect) {
@@ -256,10 +211,19 @@ void handle_exit(void) {
     exit(0);
 }
 
+#ifdef __linux__
 void sigint_handler(int signum) {
     (void) signum;
     handle_exit();
 }
+#elif _WIN32
+BOOL WINAPI console_handler(DWORD signal) {
+    if (signal == CTRL_C_EVENT) {
+        handle_exit();
+    }
+    return false;
+}
+#endif
 
 void app_add_entry(TODO_App *app, TODO_List_Index list_index, const char *todo, size_t todo_len) {
     List *list = &app->lists[list_index];
@@ -300,16 +264,16 @@ void app_reset_effects(TODO_App *app) {
 }
 
 typedef enum {
-    PRINTABLE_LAST = 255,
-    UP,
-    DOWN,
-    LEFT,
-    RIGHT,
-    ENTER,
-    BACKSPACE,
-    DELETE,
-    ESC,
-    UNKNOWN,
+    BEEN_PRINTABLE_LAST = 255,
+    BEEN_UP,
+    BEEN_DOWN,
+    BEEN_LEFT,
+    BEEN_RIGHT,
+    BEEN_ENTER,
+    BEEN_BACKSPACE,
+    BEEN_DELETE,
+    BEEN_ESC,
+    BEEN_UNKNOWN,
 } Been;
 
 void line_edit_make_sure_cursor_inside_urmom(Line_Edit *line) {
@@ -330,22 +294,22 @@ bool line_edit_all_whitespace(Line_Edit *line) {
 }
 
 int line_edit_handle_been(Line_Edit *line, int been) {
-    if (been >= PRINTABLE_LAST) {
+    if (been >= BEEN_PRINTABLE_LAST) {
         switch (been) {
-        case LEFT: {
+        case BEEN_LEFT: {
             if (line->cursor > 0) {
                 line->cursor -= 1;
             }
         } break;
-        case RIGHT: {
+        case BEEN_RIGHT: {
             if (line->cursor < line->text_len) {
                 line->cursor += 1;
             }
         } break;
-        case ESC: {
+        case BEEN_ESC: {
             return -1;
         } break;
-        case ENTER: {
+        case BEEN_ENTER: {
             if (line->text_len == 0) {
                 return -1;
             }
@@ -354,7 +318,7 @@ int line_edit_handle_been(Line_Edit *line, int been) {
             }
             return 1;
         } break;
-        case BACKSPACE: {
+        case BEEN_BACKSPACE: {
             if (line->cursor > 0) {
                 memmove(line->text + line->cursor - 1, line->text + line->cursor, line->text_len - line->cursor);
                 line->cursor -= 1;
@@ -367,7 +331,7 @@ int line_edit_handle_been(Line_Edit *line, int been) {
                 line->text_len -= 1;
             }
         } break;
-        case UNKNOWN: {
+        case BEEN_UNKNOWN: {
             return 0;
         } break;
         }
@@ -385,17 +349,17 @@ int line_edit_handle_been(Line_Edit *line, int been) {
 int fgetbeen(FILE *stream) {
     char ch = fgetc(stream);
     if (ch == EOF) {
-        return UNKNOWN;
+        return BEEN_UNKNOWN;
     } else if (ch == '\n') {
-        return ENTER;
+        return BEEN_ENTER;
     } else if (ch == 127) {
-        return BACKSPACE;
+        return BEEN_BACKSPACE;
     } else if (ch == 27) {
         char buffer[64];
         buffer[0] = ch;
         buffer[1] = fgetc(stream);
         if (buffer[1] == EOF) {
-            return ESC;
+            return BEEN_ESC;
         }
         size_t count = 2;
         while (!isalpha(buffer[count - 1]) && buffer[count - 1] != '~') {
@@ -408,27 +372,31 @@ int fgetbeen(FILE *stream) {
         }
         if (count == 3) {
             switch (buffer[2]) {
-            case 65: return UP;
-            case 66: return DOWN;
-            case 67: return RIGHT;
-            case 68: return LEFT;
+            case 65: return BEEN_UP;
+            case 66: return BEEN_DOWN;
+            case 67: return BEEN_RIGHT;
+            case 68: return BEEN_LEFT;
             }
         } else if (count == 4) {
             if (buffer[2] == '3' && buffer[3] == '~') {
                 return DELETE;
             }
         }
-        return UNKNOWN;
+        return BEEN_UNKNOWN;
     }
     return ch;
 }
 
 int main(void) {
+#ifdef __linux__
     signal(SIGINT, sigint_handler);
+#elif _WIN23
+    SetConsoleCtrlHandler(console_handler, TRUE);
+#endif
     disable_terminal_interaction();
     invisible_cursor();
     create_page();
-    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
+    make_stdin_non_blocking();
 
     TODO_App app = {0};
     while (true) {
@@ -447,25 +415,25 @@ int main(void) {
             } if (ch == 'd') {
                 List *list = &app.lists[app.list_index];
                 app_delete_entry(&app, app.list_index, list->entry_index);
-            } if (ch == ENTER) {
+            } if (ch == BEEN_ENTER) {
                 List *list = &app.lists[app.list_index];
                 app_move_entry(&app, app.list_index, list->entry_index);
-            } else if (ch == UP) {
+            } else if (ch == BEEN_UP) {
                 List *list = &app.lists[app.list_index];
                 if (list->entry_index > 0) {
                     list->entry_index -= 1;
                 }
                 app_reset_effects(&app);
-            } else if (ch == DOWN) {
+            } else if (ch == BEEN_DOWN) {
                 List *list = &app.lists[app.list_index];
                 if (list->entry_index < list->entries_count - 1) {
                     list->entry_index += 1;
                 }
                 app_reset_effects(&app);
-            } else if (ch == RIGHT) {
+            } else if (ch == BEEN_RIGHT) {
                 app.list_index = TODO_LIST_DONES;
                 app_reset_effects(&app);
-            } else if (ch == LEFT) {
+            } else if (ch == BEEN_LEFT) {
                 app.list_index = TODO_LIST_TODOS;
                 app_reset_effects(&app);
             }
@@ -487,9 +455,13 @@ int main(void) {
         } break;
         }
 
-        clear_term();
+        position_cursor(0, 0);
         draw_todo_app(&app, split);
+#ifdef __linux__
         usleep(1000000.0f*delta_time);
+#elif _WIN32
+        Sleep(1000.0f*delta_time);
+#endif
     }
     handle_exit();
     return 0;
