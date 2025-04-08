@@ -17,6 +17,8 @@
 
 // TODO(artik): add raylib as a dependency
 // TODO(nic): add entry editing
+// TODO(nic): completely change the way we do beens
+// TODO(nic): good scroll views
 
 #include "./utils.h"
 #define TERM_IMPLEMENTATION
@@ -435,7 +437,9 @@ int main(void) {
                 if (state > 0) {
                     app_add_entry(&arena, &app, app.list_index, app.line_edit.text.items, app.line_edit.text.count);
                 }
-                memset(&app.line_edit, 0, sizeof(Line_Edit));
+                app.line_edit.text.count = 0;
+                app.line_edit.cursor = 0;
+                app.line_edit.offset = 0;
                 app.state = TODO_STATE_IDLE;
             }
         } break;
