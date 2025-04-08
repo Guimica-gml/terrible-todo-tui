@@ -16,11 +16,13 @@
 #endif
 
 // TODO(artik): add raylib as a dependency
-// TODO(nic): abort todo when it's empty (or just whitespace)
 // TODO(nic): add entry editing
 
+#include "./utils.h"
 #define TERM_IMPLEMENTATION
 #include "./term.h"
+#define ARENA_IMPLEMENTATION
+#include "./arena.h"
 
 #define SCROLL_EFFECT_SPEED_MULT 4.0f
 #define WAIT_EFFECT_TIME 2.0f
@@ -44,17 +46,11 @@ typedef struct {
     Rect right;
 } Split;
 
-#define TEXT_CAP 256
 typedef struct {
-    char text[TEXT_CAP];
-    size_t text_len;
-} Entry;
-
-#define ENTRIES_CAP 256
-typedef struct {
-    Entry entries[ENTRIES_CAP];
+    String *items;
+    size_t count;
+    size_t capacity;
     size_t entry_index;
-    size_t entries_count;
 } List;
 
 typedef enum {
@@ -68,11 +64,8 @@ typedef enum {
 } TODO_List_Index;
 
 typedef struct {
-    char text[TEXT_CAP];
-    size_t text_len;
+    String text;
     size_t cursor;
-
-    size_t x;
     size_t width;
     size_t offset;
 } Line_Edit;
@@ -145,12 +138,12 @@ Rect draw_box(Rect rect, const char *title) {
 
 void draw_list(Rect rect, TODO_App *app, TODO_List_Index list_index) {
     List *list = &app->lists[list_index];
-    for (size_t i = 0; i < list->entries_count && i < rect.h; ++i) {
-        Entry *entry = &list->entries[i];
+    for (size_t i = 0; i < list->count && i < rect.h; ++i) {
+        String *entry = &list->items[i];
         position_cursor(rect.x, rect.y + i);
         if (app->state == TODO_STATE_IDLE && list_index == app->list_index && i == list->entry_index) {
-            if (entry->text_len > rect.w) {
-                if (app->scroll_effect >= entry->text_len - rect.w) {
+            if (entry->count > rect.w) {
+                if (app->scroll_effect >= entry->count - rect.w) {
                     app->wait_effect += delta_time;
                     if (app->wait_effect >= WAIT_EFFECT_TIME) {
                         app->scroll_effect = 0.0f;
@@ -163,23 +156,23 @@ void draw_list(Rect rect, TODO_App *app, TODO_List_Index list_index) {
                 app->wait_effect = 0.0f;
             }
             set_bg_color(47, 30);
-            printf("%.*s", (int) min(entry->text_len, rect.w), entry->text + (size_t) app->scroll_effect);
+            printf("%.*s", (int) min(entry->count, rect.w), entry->items + (size_t) app->scroll_effect);
         } else {
-            printf("%.*s", (int) min(entry->text_len, rect.w), entry->text);
+            printf("%.*s", (int) min(entry->count, rect.w), entry->items);
         }
         reset_bg_color();
     }
 }
 
-void draw_line_edit(Line_Edit *line, size_t y) {
-    position_cursor(line->x, y);
-    const char *a = line->text + line->offset;
-    printf("%.*s", (int) min(line->text_len - line->offset, line->width - 1), a);
+void draw_line_edit(Line_Edit *line, size_t x, size_t y) {
+    position_cursor(x, y);
+    const char *a = line->text.items + line->offset;
+    printf("%.*s", (int) min(line->text.count - line->offset, line->width - 1), a);
 
-    position_cursor(line->x + line->cursor - line->offset, y);
+    position_cursor(x + line->cursor - line->offset, y);
     set_bg_color(47, 30);
-    if (line->cursor < line->text_len) {
-        char ch = line->text[line->cursor];
+    if (line->cursor < line->text.count) {
+        char ch = line->text.items[line->cursor];
         printf("%c", ch);
     } else {
         printf(" ");
@@ -198,7 +191,7 @@ void draw_todo_app(TODO_App *app, Split split) {
     if (app->state == TODO_STATE_ADD) {
         Rect rect = rects[app->list_index];
         List *list = &app->lists[app->list_index];
-        draw_line_edit(line, rect.y + list->entries_count);
+        draw_line_edit(line, rect.x, rect.y + list->count);
     }
 
     fflush(stdout);
@@ -225,37 +218,34 @@ BOOL WINAPI console_handler(DWORD signal) {
 }
 #endif
 
-void app_add_entry(TODO_App *app, TODO_List_Index list_index, const char *todo, size_t todo_len) {
+void app_add_entry(Arena *arena, TODO_App *app, TODO_List_Index list_index, const char *todo, size_t todo_len) {
     List *list = &app->lists[list_index];
-    Entry entry = {0};
-    memcpy(entry.text, todo, todo_len);
-    entry.text_len = todo_len;
-    assert(list->entries_count < ENTRIES_CAP);
-    list->entries[list->entries_count++] = entry;
+    String entry = {0};
+    str_append_sized(arena, &entry, todo, todo_len);
+    arena_da_append(arena, list, entry);
 }
 
-Entry app_delete_entry(TODO_App *app, TODO_List_Index list_index, size_t entry_index) {
+String app_delete_entry(TODO_App *app, TODO_List_Index list_index, size_t entry_index) {
     List *list = &app->lists[list_index];
-    if (list->entries_count <= 0) {
-        return (Entry) {0};
+    if (list->count <= 0) {
+        return (String) {0};
     }
-    assert(entry_index < list->entries_count);
-    Entry entry = list->entries[entry_index];
-    memmove(list->entries + entry_index, list->entries + entry_index + 1, (list->entries_count - entry_index) * sizeof(Entry));
-    list->entries_count -= 1;
-    list->entry_index = clamp(list->entry_index, 0, list->entries_count - 1);
+    assert(entry_index < list->count);
+    String entry = list->items[entry_index];
+    arena_da_remove(list, entry_index);
+    list->entry_index = clamp(list->entry_index, 0, list->count - 1);
     return entry;
 }
 
-void app_move_entry(TODO_App *app, TODO_List_Index from_list_index, size_t entry_index) {
+void app_move_entry(Arena *arena, TODO_App *app, TODO_List_Index from_list_index, size_t entry_index) {
     List *list = &app->lists[from_list_index];
-    if (list->entries_count <= 0) {
+    if (list->count <= 0) {
         return;
     }
-    assert(entry_index < list->entries_count);
-    Entry entry = app_delete_entry(app, from_list_index, entry_index);
+    assert(entry_index < list->count);
+    String entry = app_delete_entry(app, from_list_index, entry_index);
     TODO_List_Index to_entry_index = !from_list_index;
-    app_add_entry(app, to_entry_index, entry.text, entry.text_len);
+    app_add_entry(arena, app, to_entry_index, entry.items, entry.count);
 }
 
 void app_reset_effects(TODO_App *app) {
@@ -276,7 +266,7 @@ typedef enum {
     BEEN_UNKNOWN,
 } Been;
 
-void line_edit_make_sure_cursor_inside_urmom(Line_Edit *line) {
+void line_edit_limit_cursor(Line_Edit *line) {
     if (line->cursor > line->offset + line->width - 1) {
         line->offset += 1;
     } else if (line->cursor < line->offset) {
@@ -285,15 +275,15 @@ void line_edit_make_sure_cursor_inside_urmom(Line_Edit *line) {
 }
 
 bool line_edit_all_whitespace(Line_Edit *line) {
-    for (size_t i = 0; i < line->text_len; ++i) {
-        if (!isspace(line->text[i])) {
+    for (size_t i = 0; i < line->text.count; ++i) {
+        if (!isspace(line->text.items[i])) {
             return false;
         }
     }
     return true;
 }
 
-int line_edit_handle_been(Line_Edit *line, int been) {
+int line_edit_handle_been(Arena *arena, Line_Edit *line, int been) {
     if (been >= BEEN_PRINTABLE_LAST) {
         switch (been) {
         case BEEN_LEFT: {
@@ -302,7 +292,7 @@ int line_edit_handle_been(Line_Edit *line, int been) {
             }
         } break;
         case BEEN_RIGHT: {
-            if (line->cursor < line->text_len) {
+            if (line->cursor < line->text.count) {
                 line->cursor += 1;
             }
         } break;
@@ -310,7 +300,7 @@ int line_edit_handle_been(Line_Edit *line, int been) {
             return -1;
         } break;
         case BEEN_ENTER: {
-            if (line->text_len == 0) {
+            if (line->text.count == 0) {
                 return -1;
             }
             if (line_edit_all_whitespace(line)) {
@@ -320,15 +310,13 @@ int line_edit_handle_been(Line_Edit *line, int been) {
         } break;
         case BEEN_BACKSPACE: {
             if (line->cursor > 0) {
-                memmove(line->text + line->cursor - 1, line->text + line->cursor, line->text_len - line->cursor);
+                arena_da_remove(&line->text, line->cursor - 1);
                 line->cursor -= 1;
-                line->text_len -= 1;
             }
         } break;
-        case DELETE: {
-            if (line->cursor < line->text_len) {
-                memmove(line->text + line->cursor, line->text + line->cursor + 1, line->text_len - line->cursor);
-                line->text_len -= 1;
+        case BEEN_DELETE: {
+            if (line->cursor < line->text.count) {
+                arena_da_remove(&line->text, line->cursor);
             }
         } break;
         case BEEN_UNKNOWN: {
@@ -336,13 +324,10 @@ int line_edit_handle_been(Line_Edit *line, int been) {
         } break;
         }
     } else {
-        if (line->text_len < TEXT_CAP) {
-            memmove(line->text + line->cursor + 1, line->text + line->cursor, line->text_len - line->cursor);
-            line->text[line->cursor++] = been;
-            line->text_len += 1;
-        }
+        arena_da_insert(arena, &line->text, line->cursor, been);
+        line->cursor += 1;
     }
-    line_edit_make_sure_cursor_inside_urmom(line);
+    line_edit_limit_cursor(line);
     return 0;
 }
 
@@ -379,7 +364,7 @@ int fgetbeen(FILE *stream) {
             }
         } else if (count == 4) {
             if (buffer[2] == '3' && buffer[3] == '~') {
-                return DELETE;
+                return BEEN_DELETE;
             }
         }
         return BEEN_UNKNOWN;
@@ -399,6 +384,8 @@ int main(void) {
     make_stdin_non_blocking();
 
     TODO_App app = {0};
+    Arena arena = {0};
+
     while (true) {
         Term_Size term_size = get_terminal_size();
         Rect term_rect = { 1, 1, term_size.cols, term_size.rows };
@@ -417,7 +404,7 @@ int main(void) {
                 app_delete_entry(&app, app.list_index, list->entry_index);
             } if (ch == BEEN_ENTER) {
                 List *list = &app.lists[app.list_index];
-                app_move_entry(&app, app.list_index, list->entry_index);
+                app_move_entry(&arena, &app, app.list_index, list->entry_index);
             } else if (ch == BEEN_UP) {
                 List *list = &app.lists[app.list_index];
                 if (list->entry_index > 0) {
@@ -426,7 +413,7 @@ int main(void) {
                 app_reset_effects(&app);
             } else if (ch == BEEN_DOWN) {
                 List *list = &app.lists[app.list_index];
-                if (list->entry_index < list->entries_count - 1) {
+                if (list->entry_index < list->count - 1) {
                     list->entry_index += 1;
                 }
                 app_reset_effects(&app);
@@ -440,14 +427,13 @@ int main(void) {
         } break;
         case TODO_STATE_ADD: {
             Rect rect = (app.list_index == TODO_LIST_TODOS) ? split.left : split.right;
-            app.line_edit.x = rect.x + 1;
             app.line_edit.width = rect.w - 2;
-            line_edit_make_sure_cursor_inside_urmom(&app.line_edit);
+            line_edit_limit_cursor(&app.line_edit);
 
-            int state = line_edit_handle_been(&app.line_edit, ch);
+            int state = line_edit_handle_been(&arena, &app.line_edit, ch);
             if (state != 0) {
                 if (state > 0) {
-                    app_add_entry(&app, app.list_index, app.line_edit.text, app.line_edit.text_len);
+                    app_add_entry(&arena, &app, app.list_index, app.line_edit.text.items, app.line_edit.text.count);
                 }
                 memset(&app.line_edit, 0, sizeof(Line_Edit));
                 app.state = TODO_STATE_IDLE;
