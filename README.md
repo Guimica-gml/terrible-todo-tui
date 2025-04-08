@@ -1,6 +1,6 @@
 # terrible-todo-tui
 
-A TODO TUI app written in C. 
+A TODO TUI app written in C.
 
 ## Controls
 
