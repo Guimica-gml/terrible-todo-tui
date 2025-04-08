@@ -63,6 +63,7 @@ void disable_terminal_interaction(void) {
     console = GetStdHandle(STD_INPUT_HANDLE);
     GetConsoleMode(console, &mode);
     SetConsoleMode(console, mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
+    ReadConsole();
 #endif
 }
 
