@@ -17,7 +17,7 @@
 
 // TODO(artik): add raylib as a dependency
 // Really important:
-// - completely change the way we do beens
+// - completely change the way we do beens :Kapp:
 // - good scroll views
 // Not so important
 // - add entry editing
@@ -56,6 +56,7 @@ typedef struct {
     size_t count;
     size_t capacity;
     size_t cursor;
+    size_t offset;
 } List;
 
 typedef struct {
@@ -77,11 +78,6 @@ typedef enum {
 } TODO_List_Index;
 
 typedef struct {
-    size_t offset;
-    size_t size;
-} Scroll_View;
-
-typedef struct {
     List lists[2];
     TODO_State state;
 
@@ -92,7 +88,6 @@ typedef struct {
 
     // TODO_STATE_ADD
     Line_Edit line_edit;
-    Scroll_View line_edit_view;
 } TODO_App;
 
 Split split_rect(Rect rect) {
