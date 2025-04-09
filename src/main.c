@@ -24,8 +24,8 @@
 // - add utf8 support
 
 #include "./utils.h"
-#define TERM_IMPLEMENTATION
-#include "./term.h"
+#define PLAT_IMPLEMENTATION
+#include "./plat.h"
 #define ARENA_IMPLEMENTATION
 #include "./arena.h"
 
@@ -99,7 +99,7 @@ Split split_rect(Rect rect) {
 
     split.right.x = rect.x + split.left.w;
     split.right.y = rect.y;
-    split.right.w = rect.w / 2.0f;
+    split.right.w = (size_t) (rect.w / 2.0f);
     split.right.h = rect.h;
     return split;
 }
@@ -458,7 +458,7 @@ int main(void) {
 #ifdef __linux__
         usleep(1000000.0f*delta_time);
 #elif _WIN32
-        Sleep(1000.0f*delta_time);
+        Sleep((DWORD)(1000.0f*delta_time));
 #endif
     }
     handle_exit();

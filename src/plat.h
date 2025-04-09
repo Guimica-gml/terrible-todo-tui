@@ -1,5 +1,5 @@
-#ifndef TERM_H_
-#define TERM_H_
+#ifndef PLAT_H_
+#define PLAT_H_
 
 #include <stdlib.h>
 
@@ -27,23 +27,21 @@ typedef struct {
     size_t cols;
 } Term_Size;
 
+// Terminal functions
+Term_Size get_terminal_size(void);
+void prepare_terminal(void);
+void unprepare_terminal(void);
 void visible_cursor(void);
 void invisible_cursor(void);
-void position_cursor(size_t s, size_t y);
 void create_page(void);
 void delete_page(void);
 void set_bg_color(int bg, int fg);
 void reset_bg_color(void);
-Term_Size get_terminal_size(void);
+void position_cursor(size_t s, size_t y);
 
-void disable_terminal_interaction(void);
-void enable_terminal_interaction(void);
+#endif // PLAT_H_
 
-void make_stdin_non_blocking(void);
-
-#endif // TERM_H_
-
-#ifdef TERM_IMPLEMENTATION
+#ifdef PLAT_IMPLEMENTATION
 
 #ifdef __linux__
     struct termios tio = {0};
@@ -52,32 +50,26 @@ void make_stdin_non_blocking(void);
     DWORD mode;
 #endif
 
-void disable_terminal_interaction(void) {
+void prepare_terminal(void) {
 #ifdef __linux__
     struct termios new_tio;
     tcgetattr(STDIN_FILENO, &tio);
     new_tio = tio;
     new_tio.c_lflag &= ~(ICANON | ECHO);
     tcsetattr(STDIN_FILENO, TCSANOW, &new_tio);
+    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 #elif _WIN32
     console = GetStdHandle(STD_INPUT_HANDLE);
     GetConsoleMode(console, &mode);
     SetConsoleMode(console, mode & ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
-    ReadConsole();
 #endif
 }
 
-void enable_terminal_interaction(void) {
+void unprepare_terminal(void) {
 #ifdef __linux__
     tcsetattr(STDIN_FILENO, TCSANOW, &tio);
 #elif _WIN32
     SetConsoleMode(console, mode);
-#endif
-}
-
-void make_stdin_non_blocking(void) {
-#ifdef __linux__
-    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
 #endif
 }
 
@@ -131,4 +123,4 @@ Term_Size get_terminal_size(void) {
     return term_size;
 }
 
-#endif // TERM_IMPLEMENTATION
+#endif // PLAT_IMPLEMENTATION
