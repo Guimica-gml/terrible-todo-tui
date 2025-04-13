@@ -18,7 +18,6 @@
 // TODO(artik): add raylib as a dependency
 // Really important:
 // - completely change the way we do beens :Kapp:
-// - good scroll views
 // Not so important
 // - add entry editing
 // - add utf8 support
@@ -143,34 +142,6 @@ Rect draw_box(Rect rect, const char *title) {
     };
 }
 
-void draw_list(Rect rect, TODO_App *app, TODO_List_Index list_index) {
-    List *list = &app->lists[list_index];
-    for (size_t i = 0; i < list->count && i < rect.h; ++i) {
-        String *entry = &list->items[i];
-        position_cursor(rect.x, rect.y + i);
-        if (app->state == TODO_STATE_IDLE && list_index == app->list_index && i == list->cursor) {
-            if (entry->count > rect.w) {
-                if (app->scroll_effect >= entry->count - rect.w) {
-                    app->wait_effect += delta_time;
-                    if (app->wait_effect >= WAIT_EFFECT_TIME) {
-                        app->scroll_effect = 0.0f;
-                        app->wait_effect = 0.0f;
-                    }
-                } else {
-                    app->scroll_effect += delta_time * SCROLL_EFFECT_SPEED_MULT;
-                }
-            } else {
-                app->wait_effect = 0.0f;
-            }
-            set_bg_color(47, 30);
-            printf("%.*s", (int) min(entry->count, rect.w), entry->items + (size_t) app->scroll_effect);
-        } else {
-            printf("%.*s", (int) min(entry->count, rect.w), entry->items);
-        }
-        reset_bg_color();
-    }
-}
-
 typedef enum {
     BEEN_PRINTABLE_LAST = 255,
     BEEN_UP,
@@ -184,12 +155,110 @@ typedef enum {
     BEEN_UNKNOWN,
 } Been;
 
+int fgetbeen(FILE *stream) {
+    char ch = fgetc(stream);
+    if (ch == EOF) {
+        return BEEN_UNKNOWN;
+    } else if (ch == '\n') {
+        return BEEN_ENTER;
+    } else if (ch == 127) {
+        return BEEN_BACKSPACE;
+    } else if (ch == 27) {
+        char buffer[64];
+        buffer[0] = ch;
+        buffer[1] = fgetc(stream);
+        if (buffer[1] == EOF) {
+            return BEEN_ESC;
+        }
+        size_t count = 2;
+        while (!isalpha(buffer[count - 1]) && buffer[count - 1] != '~') {
+            char ch = fgetc(stream);
+            if (ch != EOF) {
+                assert(count < 64);
+                buffer[count++] = ch;
+                fprintf(stderr, "%d\n", buffer[count - 1]);
+            }
+        }
+        if (count == 3) {
+            switch (buffer[2]) {
+            case 65: return BEEN_UP;
+            case 66: return BEEN_DOWN;
+            case 67: return BEEN_RIGHT;
+            case 68: return BEEN_LEFT;
+            }
+        } else if (count == 4) {
+            if (buffer[2] == '3' && buffer[3] == '~') {
+                return BEEN_DELETE;
+            }
+        }
+        return BEEN_UNKNOWN;
+    }
+    return ch;
+}
+
+void handle_exit(void) {
+    visible_cursor();
+    enable_terminal_interaction();
+    delete_page();
+    exit(0);
+}
+
+#ifdef __linux__
+void sigint_handler(int signum) {
+    (void) signum;
+    handle_exit();
+}
+#elif _WIN32
+BOOL WINAPI console_handler(DWORD signal) {
+    if (signal == CTRL_C_EVENT) {
+        handle_exit();
+    }
+    return false;
+}
+#endif
+
 void limit_cursor(size_t *offset, size_t size, size_t cursor) {
     if (cursor > *offset + size) {
         *offset += 1;
     } else if (cursor < *offset) {
         *offset -= 1;
     }
+}
+
+void app_add_entry(Arena *arena, TODO_App *app, TODO_List_Index list_index, const char *todo, size_t todo_len) {
+    List *list = &app->lists[list_index];
+    String entry = {0};
+    str_append_sized(arena, &entry, todo, todo_len);
+    arena_da_append(arena, list, entry);
+    list->cursor = list->count - 1;
+}
+
+String app_delete_entry(TODO_App *app, TODO_List_Index list_index, size_t entry_index) {
+    List *list = &app->lists[list_index];
+    if (list->count <= 0) {
+        return (String) {0};
+    }
+    assert(entry_index < list->count);
+    String entry = list->items[entry_index];
+    arena_da_remove(list, entry_index);
+    list->cursor = clamp(list->cursor, 0, list->count - 1);
+    return entry;
+}
+
+void app_move_entry(Arena *arena, TODO_App *app, TODO_List_Index from_list_index, size_t entry_index) {
+    List *list = &app->lists[from_list_index];
+    if (list->count <= 0) {
+        return;
+    }
+    assert(entry_index < list->count);
+    String entry = app_delete_entry(app, from_list_index, entry_index);
+    TODO_List_Index to_entry_index = !from_list_index;
+    app_add_entry(arena, app, to_entry_index, entry.items, entry.count);
+}
+
+void app_reset_effects(TODO_App *app) {
+    app->scroll_effect = 0.0f;
+    app->wait_effect = 0.0f;
 }
 
 bool line_edit_all_whitespace(Line_Edit *line) {
@@ -248,103 +317,6 @@ int line_edit_handle_been(Arena *arena, Line_Edit *line, int been) {
     return 0;
 }
 
-void handle_exit(void) {
-    visible_cursor();
-    enable_terminal_interaction();
-    delete_page();
-    exit(0);
-}
-
-#ifdef __linux__
-void sigint_handler(int signum) {
-    (void) signum;
-    handle_exit();
-}
-#elif _WIN32
-BOOL WINAPI console_handler(DWORD signal) {
-    if (signal == CTRL_C_EVENT) {
-        handle_exit();
-    }
-    return false;
-}
-#endif
-
-int fgetbeen(FILE *stream) {
-    char ch = fgetc(stream);
-    if (ch == EOF) {
-        return BEEN_UNKNOWN;
-    } else if (ch == '\n') {
-        return BEEN_ENTER;
-    } else if (ch == 127) {
-        return BEEN_BACKSPACE;
-    } else if (ch == 27) {
-        char buffer[64];
-        buffer[0] = ch;
-        buffer[1] = fgetc(stream);
-        if (buffer[1] == EOF) {
-            return BEEN_ESC;
-        }
-        size_t count = 2;
-        while (!isalpha(buffer[count - 1]) && buffer[count - 1] != '~') {
-            char ch = fgetc(stream);
-            if (ch != EOF) {
-                assert(count < 64);
-                buffer[count++] = ch;
-                fprintf(stderr, "%d\n", buffer[count - 1]);
-            }
-        }
-        if (count == 3) {
-            switch (buffer[2]) {
-            case 65: return BEEN_UP;
-            case 66: return BEEN_DOWN;
-            case 67: return BEEN_RIGHT;
-            case 68: return BEEN_LEFT;
-            }
-        } else if (count == 4) {
-            if (buffer[2] == '3' && buffer[3] == '~') {
-                return BEEN_DELETE;
-            }
-        }
-        return BEEN_UNKNOWN;
-    }
-    return ch;
-}
-
-void app_add_entry(Arena *arena, TODO_App *app, TODO_List_Index list_index, const char *todo, size_t todo_len) {
-    List *list = &app->lists[list_index];
-    String entry = {0};
-    str_append_sized(arena, &entry, todo, todo_len);
-    arena_da_append(arena, list, entry);
-}
-
-String app_delete_entry(TODO_App *app, TODO_List_Index list_index, size_t entry_index) {
-    List *list = &app->lists[list_index];
-    if (list->count <= 0) {
-        return (String) {0};
-    }
-    assert(entry_index < list->count);
-    String entry = list->items[entry_index];
-    arena_da_remove(list, entry_index);
-    list->cursor = clamp(list->cursor, 0, list->count - 1);
-    return entry;
-}
-
-void app_move_entry(Arena *arena, TODO_App *app, TODO_List_Index from_list_index, size_t entry_index) {
-    List *list = &app->lists[from_list_index];
-    if (list->count <= 0) {
-        return;
-    }
-    assert(entry_index < list->count);
-    String entry = app_delete_entry(app, from_list_index, entry_index);
-    TODO_List_Index to_entry_index = !from_list_index;
-    app_add_entry(arena, app, to_entry_index, entry.items, entry.count);
-}
-
-void app_reset_effects(TODO_App *app) {
-    app->scroll_effect = 0.0f;
-    app->wait_effect = 0.0f;
-}
-
 int update_draw_line_edit(Arena *arena, Line_Edit *line, size_t x, size_t w, size_t y) {
     position_cursor(x, y);
     const char *a = line->items + line->offset;
@@ -372,64 +344,88 @@ void clear_line_edit(Line_Edit *line) {
     line->offset = 0;
 }
 
-void update_and_draw_todo_app(Arena *arena, TODO_App *app, Split split) {
-    Rect rects[2];
-    rects[TODO_LIST_TODOS] = draw_box(split.left, "TODO");
-    rects[TODO_LIST_DONES] = draw_box(split.right, "DONE");
+void draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_index) {
+    List *list = &app->lists[list_index];
 
-    switch (app->state) {
-    case TODO_STATE_IDLE: {
-        int ch = fgetbeen(stdin);
-        if (ch == 'q') {
-            handle_exit();
-        } else if (ch == 'a') {
-            app->state = TODO_STATE_ADD;
-            app_reset_effects(app);
-        } if (ch == 'd') {
-            List *list = &app->lists[app->list_index];
-            app_delete_entry(app, app->list_index, list->cursor);
-        } if (ch == BEEN_ENTER) {
-            List *list = &app->lists[app->list_index];
-            app_move_entry(arena, app, app->list_index, list->cursor);
-        } else if (ch == BEEN_UP) {
-            List *list = &app->lists[app->list_index];
-            if (list->cursor > 0) {
-                list->cursor -= 1;
+    if (list_index == app->list_index) {
+        switch (app->state) {
+        case TODO_STATE_IDLE: {
+            int ch = fgetbeen(stdin);
+            if (ch == 'q') {
+                handle_exit();
+            } else if (ch == 'a') {
+                app->state = TODO_STATE_ADD;
+                app_reset_effects(app);
+            } if (ch == 'd') {
+                app_delete_entry(app, app->list_index, list->cursor);
+            } if (ch == BEEN_ENTER) {
+                app_move_entry(arena, app, app->list_index, list->cursor);
+            } else if (ch == BEEN_UP) {
+                if (list->cursor > 0) {
+                    list->cursor -= 1;
+                }
+                app_reset_effects(app);
+            } else if (ch == BEEN_DOWN) {
+                if (list->cursor < list->count - 1) {
+                    list->cursor += 1;
+                }
+                app_reset_effects(app);
+            } else if (ch == BEEN_RIGHT) {
+                app->list_index = TODO_LIST_DONES;
+                app_reset_effects(app);
+            } else if (ch == BEEN_LEFT) {
+                app->list_index = TODO_LIST_TODOS;
+                app_reset_effects(app);
             }
-            app_reset_effects(app);
-        } else if (ch == BEEN_DOWN) {
-            List *list = &app->lists[app->list_index];
-            if (list->cursor < list->count - 1) {
-                list->cursor += 1;
+        } break;
+        case TODO_STATE_ADD: {
+            int state = update_draw_line_edit(arena, &app->line_edit, rect.x, rect.w, rect.y + list->count);
+            if (state != 0) {
+                if (state > 0) {
+                    app_add_entry(arena, app, app->list_index, app->line_edit.items, app->line_edit.count);
+                }
+                clear_line_edit(&app->line_edit);
+                app->state = TODO_STATE_IDLE;
             }
-            app_reset_effects(app);
-        } else if (ch == BEEN_RIGHT) {
-            app->list_index = TODO_LIST_DONES;
-            app_reset_effects(app);
-        } else if (ch == BEEN_LEFT) {
-            app->list_index = TODO_LIST_TODOS;
-            app_reset_effects(app);
+        } break;
+        default:
+            assert(0 && "unreachable");
         }
-    } break;
-    case TODO_STATE_ADD: {
-        Rect rect = rects[app->list_index];
-        List *list = &app->lists[app->list_index];
-
-        int state = update_draw_line_edit(arena, &app->line_edit, rect.x, rect.w, rect.y + list->count);
-        if (state != 0) {
-            if (state > 0) {
-                app_add_entry(arena, app, app->list_index, app->line_edit.items, app->line_edit.count);
-            }
-            clear_line_edit(&app->line_edit);
-            app->state = TODO_STATE_IDLE;
-        }
-    } break;
-    default:
-        assert(0 && "unreachable");
     }
 
-    draw_list(rects[TODO_LIST_TODOS], app, TODO_LIST_TODOS);
-    draw_list(rects[TODO_LIST_DONES], app, TODO_LIST_DONES);
+    limit_cursor(&list->offset, rect.h - 1, list->cursor);
+    for (size_t i = 0; i < list->count - list->offset && i < rect.h; ++i) {
+        String *entry = &list->items[i + list->offset];
+        position_cursor(rect.x, rect.y + i);
+        if (app->state == TODO_STATE_IDLE && list_index == app->list_index && i == list->cursor - list->offset) {
+            if (entry->count > rect.w) {
+                if (app->scroll_effect >= entry->count - rect.w) {
+                    app->wait_effect += delta_time;
+                    if (app->wait_effect >= WAIT_EFFECT_TIME) {
+                        app->scroll_effect = 0.0f;
+                        app->wait_effect = 0.0f;
+                    }
+                } else {
+                    app->scroll_effect += delta_time * SCROLL_EFFECT_SPEED_MULT;
+                }
+            } else {
+                app->wait_effect = 0.0f;
+            }
+            set_bg_color(47, 30);
+            printf("%.*s", (int) min(entry->count, rect.w), entry->items + (size_t) app->scroll_effect);
+        } else {
+            printf("%.*s", (int) min(entry->count, rect.w), entry->items);
+        }
+        reset_bg_color();
+    }
+}
+
+void update_and_draw_todo_app(Arena *arena, TODO_App *app, Split split) {
+    Rect todos_rect = draw_box(split.left, "TODO");
+    Rect dones_rect = draw_box(split.right, "DONE");
+
+    draw_list(arena, todos_rect, app, TODO_LIST_TODOS);
+    draw_list(arena, dones_rect, app, TODO_LIST_DONES);
 
     fflush(stdout);
 }
