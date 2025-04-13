@@ -197,8 +197,8 @@ int fgetbeen(FILE *stream) {
 }
 
 void handle_exit(void) {
+    unprepare_terminal();
     visible_cursor();
-    enable_terminal_interaction();
     delete_page();
     exit(0);
 }
@@ -436,10 +436,9 @@ int main(void) {
 #elif _WIN23
     SetConsoleCtrlHandler(console_handler, TRUE);
 #endif
-    disable_terminal_interaction();
+    prepare_terminal();
     invisible_cursor();
     create_page();
-    make_stdin_non_blocking();
 
     TODO_App app = {0};
     Arena arena = {0};
