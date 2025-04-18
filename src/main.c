@@ -16,10 +16,8 @@
 #endif
 
 // TODO(artik): add raylib as a dependency
-// Really important:
-// - completely change the way we do beens :Kapp:
-// Not so important
-// - add entry editing
+// TODO(nic):
+// - completely change the way we do Been :Kapp:
 // - add utf8 support
 
 #include "./utils.h"
@@ -69,6 +67,7 @@ typedef struct {
 typedef enum {
     TODO_STATE_IDLE = 0,
     TODO_STATE_ADD,
+    TODO_STATE_EDIT,
 } TODO_State;
 
 typedef enum {
@@ -317,7 +316,7 @@ int line_edit_handle_been(Arena *arena, Line_Edit *line, int been) {
     return 0;
 }
 
-int update_draw_line_edit(Arena *arena, Line_Edit *line, size_t x, size_t w, size_t y) {
+int update_and_draw_line_edit(Arena *arena, Line_Edit *line, size_t x, size_t w, size_t y) {
     position_cursor(x, y);
     const char *a = line->items + line->offset;
     printf("%.*s", (int) min(line->count - line->offset, w - 1), a);
@@ -344,7 +343,7 @@ void clear_line_edit(Line_Edit *line) {
     line->offset = 0;
 }
 
-void draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_index) {
+void update_and_draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_index) {
     List *list = &app->lists[list_index];
 
     if (list_index == app->list_index) {
@@ -356,9 +355,14 @@ void draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_inde
             } else if (ch == 'a') {
                 app->state = TODO_STATE_ADD;
                 app_reset_effects(app);
-            } if (ch == 'd') {
+            } else if (ch == 'e') {
+                String *text = &list->items[list->cursor];
+                arena_da_copy_overwrite(arena, &app->line_edit, text);
+                app->state = TODO_STATE_EDIT;
+                app_reset_effects(app);
+            } else if (ch == 'd') {
                 app_delete_entry(app, app->list_index, list->cursor);
-            } if (ch == BEEN_ENTER) {
+            } else if (ch == BEEN_ENTER) {
                 app_move_entry(arena, app, app->list_index, list->cursor);
             } else if (ch == BEEN_UP) {
                 if (list->cursor > 0) {
@@ -379,10 +383,23 @@ void draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_inde
             }
         } break;
         case TODO_STATE_ADD: {
-            int state = update_draw_line_edit(arena, &app->line_edit, rect.x, rect.w, rect.y + list->count);
+            int state = update_and_draw_line_edit(arena, &app->line_edit, rect.x, rect.w, rect.y + list->count);
             if (state != 0) {
                 if (state > 0) {
                     app_add_entry(arena, app, app->list_index, app->line_edit.items, app->line_edit.count);
+                }
+                clear_line_edit(&app->line_edit);
+                app->state = TODO_STATE_IDLE;
+            }
+        } break;
+        case TODO_STATE_EDIT: {
+            int state = update_and_draw_line_edit(arena, &app->line_edit, rect.x, rect.w, rect.y + list->cursor - list->offset);
+            if (state != 0) {
+                if (state > 0) {
+                    //__asm__("int3");
+                    String *line = &list->items[list->cursor];
+                    arena_da_copy_overwrite(arena, line, &app->line_edit);
+                    //__asm__("int3");
                 }
                 clear_line_edit(&app->line_edit);
                 app->state = TODO_STATE_IDLE;
@@ -397,6 +414,9 @@ void draw_list(Arena *arena, Rect rect, TODO_App *app, TODO_List_Index list_inde
     for (size_t i = 0; i < list->count - list->offset && i < rect.h; ++i) {
         String *entry = &list->items[i + list->offset];
         position_cursor(rect.x, rect.y + i);
+        if (app->state == TODO_STATE_EDIT && list_index == app->list_index && i == list->cursor - list->offset) {
+            continue;
+        }
         if (app->state == TODO_STATE_IDLE && list_index == app->list_index && i == list->cursor - list->offset) {
             if (entry->count > rect.w) {
                 if (app->scroll_effect >= entry->count - rect.w) {
@@ -424,8 +444,8 @@ void update_and_draw_todo_app(Arena *arena, TODO_App *app, Split split) {
     Rect todos_rect = draw_box(split.left, "TODO");
     Rect dones_rect = draw_box(split.right, "DONE");
 
-    draw_list(arena, todos_rect, app, TODO_LIST_TODOS);
-    draw_list(arena, dones_rect, app, TODO_LIST_DONES);
+    update_and_draw_list(arena, todos_rect, app, TODO_LIST_TODOS);
+    update_and_draw_list(arena, dones_rect, app, TODO_LIST_DONES);
 
     fflush(stdout);
 }
@@ -433,7 +453,7 @@ void update_and_draw_todo_app(Arena *arena, TODO_App *app, Split split) {
 int main(void) {
 #ifdef __linux__
     signal(SIGINT, sigint_handler);
-#elif _WIN23
+#elif _WIN32
     SetConsoleCtrlHandler(console_handler, TRUE);
 #endif
     prepare_terminal();

@@ -25,14 +25,23 @@
         memmove((da)->items + (i) + 1, (da)->items + (i), ((da)->count - (i)) * sizeof(*(da)->items)); \
         (da)->items[(i)] = (item);                                      \
         (da)->count += 1;                                               \
-    } while(0)
+    } while (0)
 
 #define arena_da_remove(da, i)                                          \
     do {                                                                \
         assert((i) < (da)->count);                                      \
         memmove((da)->items + (i), (da)->items + (i) + 1, ((da)->count - (i)) * sizeof(*(da)->items)); \
         (da)->count -= 1;                                               \
-    } while(0)
+    } while (0)
+
+#define arena_da_copy_overwrite(a, da_dst, da_src)                      \
+    do {                                                                \
+        assert(sizeof(*(da_dst)->items) == sizeof(*(da_src)->items));   \
+        (da_dst)->items = arena_alloc((a), sizeof(*(da_src)->items)*(da_src)->count); \
+        memcpy((da_dst)->items, (da_src)->items, sizeof(*(da_src)->items)*(da_src)->count); \
+        (da_dst)->count = (da_src)->count;                              \
+        (da_dst)->capacity = (da_src)->capacity;                        \
+    } while (0)
 
 #define SV(cstr) ((String_View) { .data = (cstr), .size = strlen(cstr) })
 #define SV_STATIC(cstr) { .data = (cstr), .size = sizeof(cstr) - 1 }
