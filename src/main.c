@@ -156,9 +156,7 @@ typedef enum {
 
 int fgetbeen(FILE *stream) {
     char ch = fgetc(stream);
-    if (ch == EOF) {
-        return BEEN_UNKNOWN;
-    } else if (ch == '\n') {
+    if (ch == '\n') {
         return BEEN_ENTER;
     } else if (ch == 127) {
         return BEEN_BACKSPACE;
@@ -190,6 +188,9 @@ int fgetbeen(FILE *stream) {
                 return BEEN_DELETE;
             }
         }
+        return BEEN_UNKNOWN;
+    }
+    if (ch < 32 || ch == 127) {
         return BEEN_UNKNOWN;
     }
     return ch;
